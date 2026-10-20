@@ -1,0 +1,186 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default Deny All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'riyadahmed8182662@gmail.com'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation: Product
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'name', 'price', 'stock', 'sku', 'status'])
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 200
+        && data.price is number && data.price >= 0
+        && data.stock is number && data.stock >= 0
+        && data.sku is string && data.sku.size() <= 100
+        && data.status in ['published', 'draft', 'archived'];
+    }
+
+    // Validation: Category
+    function isValidCategory(data) {
+      return data.keys().hasAll(['id', 'name', 'slug', 'active'])
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 100
+        && data.slug is string && data.slug.size() <= 100
+        && data.active is bool;
+    }
+
+    // Validation: Order
+    function isValidOrder(data) {
+      return data.keys().hasAll(['id', 'orderNumber', 'customerId', 'customerName', 'customerPhone', 'items', 'total', 'paymentMethod', 'paymentStatus', 'orderStatus'])
+        && data.id is string && data.id.size() <= 128
+        && data.orderNumber is string && data.orderNumber.size() <= 50
+        && data.customerId is string && data.customerId.size() <= 128
+        && data.customerName is string && data.customerName.size() <= 120
+        && data.customerPhone is string && data.customerPhone.size() <= 30
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 100
+        && data.total is number && data.total >= 0
+        && data.paymentMethod in ['cod', 'bkash', 'nagad']
+        && data.paymentStatus in ['unpaid', 'pending_verification', 'paid', 'refunded']
+        && data.orderStatus in ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'returned'];
+    }
+
+    // Validation: User Profile
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'email', 'role'])
+        && data.id is string && data.id.size() <= 128
+        && data.email is string && data.email.size() <= 120
+        && data.role in ['customer', 'admin'];
+    }
+
+    // Products catalog
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (resource.data.status == 'published' || isAdmin());
+      allow list: if (resource.data.status == 'published') || isAdmin();
+      allow create: if isValidId(productId) && isAdmin() && isValidProduct(incoming());
+      allow update: if isValidId(productId) && isAdmin() && isValidProduct(incoming());
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId) && (resource.data.active == true || isAdmin());
+      allow list: if (resource.data.active == true) || isAdmin();
+      allow create: if isValidId(categoryId) && isAdmin() && isValidCategory(incoming());
+      allow update: if isValidId(categoryId) && isAdmin() && isValidCategory(incoming());
+      allow delete: if isValidId(categoryId) && isAdmin();
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (isOwner(resource.data.customerId) || isAdmin());
+      allow list: if (isSignedIn() && resource.data.customerId == request.auth.uid) || isAdmin();
+      allow create: if isValidId(orderId) && isSignedIn()
+        && isValidOrder(incoming())
+        && incoming().customerId == request.auth.uid
+        && incoming().orderStatus == 'pending'
+        && incoming().paymentStatus == 'unpaid';
+      allow update: if isValidId(orderId) && (
+        isAdmin() ||
+        (isOwner(resource.data.customerId) && incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'updatedAt']))
+      );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isOwner(userId)
+        && isValidUser(incoming())
+        && incoming().role == 'customer';
+      allow update: if isValidId(userId) && (
+        isAdmin() ||
+        (
+          isOwner(userId)
+          && incoming().role == existing().role
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'address', 'defaultShipping', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Admins registry
+    match /admins/{adminId} {
+      allow get, list: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Coupons
+    match /coupons/{couponId} {
+      allow get: if isValidId(couponId);
+      allow list: if (resource.data.active == true) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Store Settings
+    match /storeSettings/{settingId} {
+      allow get, list: if true;
+      allow write: if isAdmin();
+    }
+
+    // Banners
+    match /banners/{bannerId} {
+      allow get: if isValidId(bannerId) && (resource.data.active == true || isAdmin());
+      allow list: if (resource.data.active == true) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Inventory Events
+    match /inventoryEvents/{eventId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(eventId) && (isAdmin() || isSignedIn());
+      allow update, delete: if false; // Append-only audit
+    }
+
+    // Audit Logs
+    match /auditLogs/{logId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(logId) && isSignedIn();
+      allow update, delete: if false; // Append-only audit
+    }
+
+    // Support Tickets
+    match /supportTickets/{ticketId} {
+      allow get: if isValidId(ticketId) && (isOwner(resource.data.customerId) || isAdmin());
+      allow list: if (isSignedIn() && resource.data.customerId == request.auth.uid) || isAdmin();
+      allow create: if isValidId(ticketId) && isSignedIn() && incoming().customerId == request.auth.uid;
+      allow update: if isValidId(ticketId) && (
+        isAdmin() ||
+        (isOwner(resource.data.customerId) && incoming().diff(existing()).affectedKeys().hasOnly(['replies', 'updatedAt']))
+      );
+      allow delete: if isValidId(ticketId) && isAdmin();
+    }
+  }
+}

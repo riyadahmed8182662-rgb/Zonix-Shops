@@ -1,0 +1,6 @@
+{
+  "name": "ZonixShop Bangladesh",
+  "description": "Production e-commerce platform for ZonixShop Bangladesh featuring real Firebase authentication, Firestore inventory, secure server-validated orders, and admin controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
